@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 若本地无模型：用 HF_TOKEN 拉取 HF_REPO_ID → HF_LOCAL_DIR，再转 GGUF / 量化到 MODEL_PATH。
-# 下载、转换中间件、缓存一律在 VOLUME_ROOT（默认 /models）挂载盘上。
+# 准备 MODEL_PATH（优先挂载盘上的现成 GGUF，避免整模转换撑爆磁盘）
+# 顺序：已有文件 → MODEL_URL → HF_GGUF_REPO 单文件 →（可选）HF 全量转换
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,7 +9,10 @@ log() { echo "[gto-llamacpp] $*"; }
 HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 HF_REPO_ID="${HF_REPO_ID:-}"
 MODEL_URL="${MODEL_URL:-}"
-AUTO_CONVERT="${AUTO_CONVERT:-1}"
+# 默认直接拉 GGUF；全量 convert 很吃盘（HF≈18G + Q8 临时≈10G+）
+HF_GGUF_REPO="${HF_GGUF_REPO:-unsloth/Qwen3.5-9B-GGUF}"
+HF_GGUF_FILE="${HF_GGUF_FILE:-Qwen3.5-9B-Q4_K_M.gguf}"
+AUTO_CONVERT="${AUTO_CONVERT:-0}"
 CONVERT_OUTTYPE="${CONVERT_OUTTYPE:-q8_0}"
 QUANTIZE_TYPE="${QUANTIZE_TYPE:-Q4_K_M}"
 KEEP_CONVERT_TMP="${KEEP_CONVERT_TMP:-0}"
@@ -22,59 +25,116 @@ VOLUME_ROOT="${VOLUME_ROOT:-/models}"
 source "${SCRIPT_DIR}/volume_layout.sh"
 prepare_volume_layout || exit 1
 
-# 转换阶段默认不用 GPU（权重读写在盘上）
 export CUDA_VISIBLE_DEVICES="${CONVERT_CUDA_VISIBLE_DEVICES:-}"
+export HF_TOKEN
+export HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-$HF_TOKEN}"
+export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 
-need_hf_download() {
+hf_auth_args() {
+  if [[ -n "$HF_TOKEN" ]]; then
+    echo --token "$HF_TOKEN"
+  fi
+}
+
+download_gguf_from_hf() {
+  if [[ -z "$HF_GGUF_REPO" || -z "$HF_GGUF_FILE" ]]; then
+    return 1
+  fi
+  if [[ -z "$HF_TOKEN" ]]; then
+    log "WARN: HF_GGUF_REPO set but HF_TOKEN empty（公开仓或许仍可下）"
+  fi
+  mkdir -p "$(dirname "$MODEL_PATH")"
+  local dest_dir
+  dest_dir="$(dirname "$MODEL_PATH")"
+  log "GGUF download: $HF_GGUF_REPO / $HF_GGUF_FILE -> $MODEL_PATH"
+
+  # 下到 gguf 目录再落到 MODEL_PATH（避免多文件污染）
+  local dl_dir="${VOLUME_ROOT}/gguf/.hf_dl"
+  mkdir -p "$dl_dir"
+  # shellcheck disable=SC2046
+  if command -v hf >/dev/null 2>&1; then
+    hf download "$HF_GGUF_REPO" "$HF_GGUF_FILE" \
+      --local-dir "$dl_dir" \
+      $(hf_auth_args)
+  elif command -v huggingface-cli >/dev/null 2>&1; then
+    huggingface-cli download "$HF_GGUF_REPO" "$HF_GGUF_FILE" \
+      --local-dir "$dl_dir" \
+      $(hf_auth_args)
+  else
+    export HF_GGUF_REPO HF_GGUF_FILE
+    export DL_DIR="$dl_dir"
+    python3 - <<'PY'
+import os
+from huggingface_hub import hf_hub_download
+path = hf_hub_download(
+    repo_id=os.environ["HF_GGUF_REPO"],
+    filename=os.environ["HF_GGUF_FILE"],
+    local_dir=os.environ["DL_DIR"],
+    token=os.environ.get("HF_TOKEN") or None,
+)
+print(path)
+PY
+  fi
+
+  local found=""
+  if [[ -f "${dl_dir}/${HF_GGUF_FILE}" ]]; then
+    found="${dl_dir}/${HF_GGUF_FILE}"
+  else
+    found="$(find "$dl_dir" -type f -name "$(basename "$HF_GGUF_FILE")" 2>/dev/null | head -n1 || true)"
+  fi
+  if [[ -z "$found" || ! -f "$found" ]]; then
+    log "ERROR: GGUF file not found after download: $HF_GGUF_FILE"
+    return 1
+  fi
+  if [[ "$found" != "$MODEL_PATH" ]]; then
+    mv -f "$found" "$MODEL_PATH"
+  fi
+  # 清理临时下载目录中的残留
+  rm -rf "$dl_dir"
+  log "GGUF ready: $MODEL_PATH ($(du -h "$MODEL_PATH" | awk '{print $1}'))"
+  return 0
+}
+
+need_hf_weights() {
+  [[ "$AUTO_CONVERT" == "1" ]] || return 1
   [[ -n "$HF_REPO_ID" ]] || return 1
   [[ -f "${HF_LOCAL_DIR}/config.json" ]] && return 1
   [[ -f "${HF_LOCAL_DIR}/.hf_download_ok" ]] && return 1
   return 0
 }
 
-download_hf() {
+download_hf_weights() {
   if [[ -z "$HF_TOKEN" ]]; then
-    log "ERROR: HF_REPO_ID set but HF_TOKEN empty"
+    log "ERROR: AUTO_CONVERT 需要 HF_TOKEN 下载 $HF_REPO_ID"
     exit 1
   fi
   mkdir -p "$HF_LOCAL_DIR"
-  log "HF download: $HF_REPO_ID -> $HF_LOCAL_DIR"
-  export HF_TOKEN
-  export HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"
-  export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
-
+  log "HF weights download: $HF_REPO_ID -> $HF_LOCAL_DIR"
   local rev_args=()
   if [[ -n "$HF_DOWNLOAD_REVISION" ]]; then
     rev_args=(--revision "$HF_DOWNLOAD_REVISION")
   fi
-
+  # shellcheck disable=SC2046
   if command -v hf >/dev/null 2>&1; then
-    hf download "$HF_REPO_ID" \
-      --local-dir "$HF_LOCAL_DIR" \
-      --token "$HF_TOKEN" \
-      "${rev_args[@]}"
+    hf download "$HF_REPO_ID" --local-dir "$HF_LOCAL_DIR" $(hf_auth_args) "${rev_args[@]}"
   elif command -v huggingface-cli >/dev/null 2>&1; then
-    huggingface-cli download "$HF_REPO_ID" \
-      --local-dir "$HF_LOCAL_DIR" \
-      --token "$HF_TOKEN" \
-      "${rev_args[@]}"
+    huggingface-cli download "$HF_REPO_ID" --local-dir "$HF_LOCAL_DIR" $(hf_auth_args) "${rev_args[@]}"
   else
-    export HF_REPO_ID HF_LOCAL_DIR HF_TOKEN HF_DOWNLOAD_REVISION
+    export HF_REPO_ID HF_LOCAL_DIR HF_DOWNLOAD_REVISION
     python3 - <<'PY'
 import os
 from huggingface_hub import snapshot_download
-
 rev = os.environ.get("HF_DOWNLOAD_REVISION") or None
 snapshot_download(
     repo_id=os.environ["HF_REPO_ID"],
     local_dir=os.environ["HF_LOCAL_DIR"],
-    token=os.environ["HF_TOKEN"],
+    token=os.environ.get("HF_TOKEN") or None,
     revision=rev,
 )
 PY
   fi
   touch "${HF_LOCAL_DIR}/.hf_download_ok"
-  log "HF download done"
+  log "HF weights download done"
 }
 
 convert_and_quantize() {
@@ -84,6 +144,15 @@ convert_and_quantize() {
   fi
   if [[ ! -f "$CONVERT_SCRIPT" ]]; then
     log "ERROR: convert script missing: $CONVERT_SCRIPT"
+    exit 1
+  fi
+
+  local free_kb
+  free_kb="$(df -Pk "$VOLUME_ROOT" | awk 'NR==2{print $4}')"
+  # Q8 转换 + 量化通常需要额外十几 GB；不足则直接失败并提示改拉 GGUF
+  if [[ -n "$free_kb" && "$free_kb" -lt 25000000 ]]; then
+    log "ERROR: 挂载盘剩余约 $((free_kb/1024/1024))GB，全量转换风险高（建议≥25GB 空闲）"
+    log "  请改用现成 GGUF：HF_GGUF_REPO=unsloth/Qwen3.5-9B-GGUF HF_GGUF_FILE=Qwen3.5-9B-Q4_K_M.gguf AUTO_CONVERT=0"
     exit 1
   fi
 
@@ -98,7 +167,6 @@ convert_and_quantize() {
     convert_dir="$(dirname "$CONVERT_SCRIPT")"
     (
       cd "$convert_dir"
-      # --use-temp-file：大文件临时段走 TMPDIR（挂载盘）
       python3 "$(basename "$CONVERT_SCRIPT")" "$HF_LOCAL_DIR" \
         --outfile "$tmp_gguf" \
         --outtype "$CONVERT_OUTTYPE" \
@@ -141,22 +209,28 @@ if [[ -f "$MODEL_PATH" ]]; then
   exit 0
 fi
 
-if need_hf_download; then
-  download_hf
-elif [[ -n "$HF_REPO_ID" ]]; then
-  log "HF cache hit: $HF_LOCAL_DIR"
-fi
-
-if [[ ! -f "$MODEL_PATH" && "$AUTO_CONVERT" == "1" && -n "$HF_REPO_ID" ]]; then
-  convert_and_quantize
-fi
-
-if [[ ! -f "$MODEL_PATH" && -n "$MODEL_URL" ]]; then
+if [[ -n "$MODEL_URL" ]]; then
   download_direct_url
+fi
+
+if [[ ! -f "$MODEL_PATH" && -n "$HF_GGUF_REPO" ]]; then
+  download_gguf_from_hf || log "WARN: GGUF download failed, will try convert if enabled"
+fi
+
+if [[ ! -f "$MODEL_PATH" && "$AUTO_CONVERT" == "1" ]]; then
+  if need_hf_weights; then
+    download_hf_weights
+  elif [[ -n "$HF_REPO_ID" ]]; then
+    log "HF weights cache hit: $HF_LOCAL_DIR"
+  fi
+  if [[ -n "$HF_REPO_ID" ]]; then
+    convert_and_quantize
+  fi
 fi
 
 if [[ ! -f "$MODEL_PATH" ]]; then
   log "ERROR: model missing: $MODEL_PATH"
-  log "  Set HF_REPO_ID+HF_TOKEN (auto download+convert) or MODEL_URL or mount GGUF"
+  log "  推荐: HF_TOKEN + HF_GGUF_REPO=unsloth/Qwen3.5-9B-GGUF HF_GGUF_FILE=Qwen3.5-9B-Q4_K_M.gguf"
+  log "  或设 MODEL_URL=直链；仅在有充足磁盘时 AUTO_CONVERT=1"
   exit 1
 fi

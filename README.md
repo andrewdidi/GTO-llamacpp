@@ -26,8 +26,12 @@ ghcr.io/andrewdidi/gto-llamacpp:latest
 API_KEY=你的调用密钥
 HF_TOKEN=你的HF令牌
 VOLUME_ROOT=/models
-HF_REPO_ID=Qwen/Qwen3.5-9B
+HF_GGUF_REPO=unsloth/Qwen3.5-9B-GGUF
+HF_GGUF_FILE=Qwen3.5-9B-Q4_K_M.gguf
+AUTO_CONVERT=0
 ```
+
+默认**直接下载现成 Q4_K_M GGUF**（约 5–6GB），不再本地把官方 Safetensors 转 Q8（易撑爆磁盘）。仅在磁盘很充足时设 `AUTO_CONVERT=1`。
 
 挂载盘目录结构：
 

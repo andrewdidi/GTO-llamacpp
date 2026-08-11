@@ -29,11 +29,11 @@ RUN chmod +x /gto/start.sh /gto/scripts/*.sh \
 ENV HOST=0.0.0.0 \
     PORT=8000 \
     VOLUME_ROOT=/models \
-    HF_REPO_ID=Qwen/Qwen3.5-9B \
-    HF_LOCAL_DIR=/models/hf/Qwen3.5-9B \
+    HF_GGUF_REPO=unsloth/Qwen3.5-9B-GGUF \
+    HF_GGUF_FILE=Qwen3.5-9B-Q4_K_M.gguf \
     MODEL_PATH=/models/gguf/Qwen3.5-9B-Q4_K_M.gguf \
     MODEL_ALIAS=Qwen3.5-9B \
-    AUTO_CONVERT=1 \
+    AUTO_CONVERT=0 \
     HF_HUB_ENABLE_HF_TRANSFER=1 \
     LLAMA_SERVER_BIN=/app/llama-server \
     LLAMA_QUANTIZE_BIN=/app/llama-quantize \
