@@ -1,0 +1,7 @@
+.git
+.gitignore
+models
+*.gguf
+*.log
+README.md
+docs

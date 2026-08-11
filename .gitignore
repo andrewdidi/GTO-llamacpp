@@ -1,0 +1,12 @@
+# GTO-llamacpp — 本地/忽略文件
+
+config/config.env
+models/*
+!models/.gitkeep
+*.gguf
+.cache/
+__pycache__/
+.DS_Store
+._*
+*.log
+.env
