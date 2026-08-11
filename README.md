@@ -19,19 +19,25 @@ ghcr.io/andrewdidi/gto-llamacpp:latest
 1. **Pods → Deploy**（不要用 Serverless）
 2. Container Image：`ghcr.io/andrewdidi/gto-llamacpp:latest`
 3. HTTP Port：`8000`
-4. Volume 挂载：`/models`（磁盘建议 ≥ 80GB）
+4. Volume 挂载：`/models`（磁盘建议 ≥ 80GB；HF/GGUF/缓存/临时文件全写这里）
 5. 环境变量（必填，否则进程会退出并反复重启）：
 
 ```text
 API_KEY=你的调用密钥
 HF_TOKEN=你的HF令牌
+VOLUME_ROOT=/models
 HF_REPO_ID=Qwen/Qwen3.5-9B
-HF_LOCAL_DIR=/models/hf/Qwen3.5-9B
-MODEL_PATH=/models/gguf/Qwen3.5-9B-Q4_K_M.gguf
-MODEL_ALIAS=Qwen3.5-9B
 ```
 
-RunPod 界面：**Edit Pod → Environment Variables** 添加上述键值后 **Restart**。
+挂载盘目录结构：
+
+```text
+/models/
+  hf/Qwen3.5-9B/     # HF 权重
+  gguf/*.gguf        # 转换/量化结果
+  cache/             # tmp、torch、HF hub、pip、pycache
+  logs/
+```
 
 6. 访问：`https://<POD_ID>-8000.proxy.runpod.net/v1/chat/completions`
 

@@ -28,6 +28,7 @@ RUN chmod +x /gto/start.sh /gto/scripts/*.sh \
 # 官方 full 镜像：二进制与 .so、convert 脚本均在 /app
 ENV HOST=0.0.0.0 \
     PORT=8000 \
+    VOLUME_ROOT=/models \
     HF_REPO_ID=Qwen/Qwen3.5-9B \
     HF_LOCAL_DIR=/models/hf/Qwen3.5-9B \
     MODEL_PATH=/models/gguf/Qwen3.5-9B-Q4_K_M.gguf \

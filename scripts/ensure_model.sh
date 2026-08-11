@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # 若本地无模型：用 HF_TOKEN 拉取 HF_REPO_ID → HF_LOCAL_DIR，再转 GGUF / 量化到 MODEL_PATH。
+# 下载、转换中间件、缓存一律在 VOLUME_ROOT（默认 /models）挂载盘上。
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 log() { echo "[gto-llamacpp] $*"; }
 
 HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 HF_REPO_ID="${HF_REPO_ID:-}"
-HF_LOCAL_DIR="${HF_LOCAL_DIR:-/models/hf/Qwen3.5-9B}"
-MODEL_PATH="${MODEL_PATH:-/models/gguf/Qwen3.5-9B-Q4_K_M.gguf}"
 MODEL_URL="${MODEL_URL:-}"
 AUTO_CONVERT="${AUTO_CONVERT:-1}"
 CONVERT_OUTTYPE="${CONVERT_OUTTYPE:-q8_0}"
@@ -16,31 +16,14 @@ KEEP_CONVERT_TMP="${KEEP_CONVERT_TMP:-0}"
 CONVERT_SCRIPT="${CONVERT_SCRIPT:-/app/convert_hf_to_gguf.py}"
 LLAMA_QUANTIZE_BIN="${LLAMA_QUANTIZE_BIN:-/app/llama-quantize}"
 HF_DOWNLOAD_REVISION="${HF_DOWNLOAD_REVISION:-}"
-CACHE_ROOT="${CACHE_ROOT:-/models/cache}"
+VOLUME_ROOT="${VOLUME_ROOT:-/models}"
 
-# torch/transformers 在 RunPod 上常因 /tmp、HOME 不可写在 import 阶段崩；统一落到 Volume
-prepare_runtime_dirs() {
-  mkdir -p \
-    "$CACHE_ROOT/home" \
-    "$CACHE_ROOT/tmp" \
-    "$CACHE_ROOT/torch/inductor" \
-    "$CACHE_ROOT/torch/hub" \
-    "$CACHE_ROOT/hf" \
-    "$CACHE_ROOT/xdg" \
-    /tmp
-  export HOME="${HOME:-$CACHE_ROOT/home}"
-  export TMPDIR="$CACHE_ROOT/tmp"
-  export TEMP="$TMPDIR"
-  export TMP="$TMPDIR"
-  export TORCHINDUCTOR_CACHE_DIR="$CACHE_ROOT/torch/inductor"
-  export TORCH_HOME="$CACHE_ROOT/torch"
-  export HF_HOME="${HF_HOME:-$CACHE_ROOT/hf}"
-  export XDG_CACHE_HOME="$CACHE_ROOT/xdg"
-  export TORCHDYNAMO_DISABLE=1
-  export TORCH_COMPILE_DISABLE=1
-  # 转换用 CPU 即可，避免无谓的 CUDA 初始化干扰
-  export CUDA_VISIBLE_DEVICES="${CONVERT_CUDA_VISIBLE_DEVICES:-}"
-}
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/volume_layout.sh"
+prepare_volume_layout || exit 1
+
+# 转换阶段默认不用 GPU（权重读写在盘上）
+export CUDA_VISIBLE_DEVICES="${CONVERT_CUDA_VISIBLE_DEVICES:-}"
 
 need_hf_download() {
   [[ -n "$HF_REPO_ID" ]] || return 1
@@ -54,7 +37,6 @@ download_hf() {
     log "ERROR: HF_REPO_ID set but HF_TOKEN empty"
     exit 1
   fi
-  prepare_runtime_dirs
   mkdir -p "$HF_LOCAL_DIR"
   log "HF download: $HF_REPO_ID -> $HF_LOCAL_DIR"
   export HF_TOKEN
@@ -105,22 +87,22 @@ convert_and_quantize() {
     exit 1
   fi
 
-  prepare_runtime_dirs
   mkdir -p "$(dirname "$MODEL_PATH")"
   local tmp_gguf
   tmp_gguf="$(dirname "$MODEL_PATH")/Qwen3.5-9B.${CONVERT_OUTTYPE}.gguf"
 
   if [[ ! -f "$tmp_gguf" ]]; then
     log "Converting HF -> GGUF ($CONVERT_OUTTYPE): $tmp_gguf"
-    log "  cache/tmp -> $CACHE_ROOT (TORCHDYNAMO_DISABLE=1)"
-    # 官方脚本依赖 /app 下 conversion、gguf-py 相对路径
+    log "  TMPDIR=$TMPDIR (on volume)"
     local convert_dir
     convert_dir="$(dirname "$CONVERT_SCRIPT")"
     (
       cd "$convert_dir"
+      # --use-temp-file：大文件临时段走 TMPDIR（挂载盘）
       python3 "$(basename "$CONVERT_SCRIPT")" "$HF_LOCAL_DIR" \
         --outfile "$tmp_gguf" \
-        --outtype "$CONVERT_OUTTYPE"
+        --outtype "$CONVERT_OUTTYPE" \
+        --use-temp-file
     )
   else
     log "Reuse convert output: $tmp_gguf"
@@ -154,8 +136,6 @@ download_direct_url() {
 }
 
 # --- main ---
-prepare_runtime_dirs
-
 if [[ -f "$MODEL_PATH" ]]; then
   log "Model present: $MODEL_PATH"
   exit 0
