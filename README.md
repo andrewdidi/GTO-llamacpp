@@ -11,7 +11,7 @@ ghcr.io/andrewdidi/gto-llamacpp:latest
 ```
 
 - Actions：仓库 → **Actions** → **Build and push Docker image**（也可手动 **Run workflow**）
-- 首次构建约需较长时间（编译 CUDA `llama-server`）
+- Dockerfile 基于官方 `ghcr.io/ggml-org/llama.cpp:full-cuda`（不再自编译，构建通常几分钟）
 - 若 RunPod 拉镜像 401：到 GitHub → **Packages** → `gto-llamacpp` → Package settings → **Change visibility → Public**
 
 ### RunPod Pod 填这些即可

@@ -60,6 +60,4 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # 默认 CUDA 构建；无 GPU runner 也可编译
-          build-args: |
-            GGML_CUDA=ON
+          # 基于官方 full-cuda，不再源码编译

@@ -3,7 +3,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 兼容镜像内 /gto 与本地仓库根目录
 CFG="${ROOT}/config/config.env"
+if [[ ! -f "$CFG" && -f /gto/config/config.env ]]; then
+  CFG=/gto/config/config.env
+fi
 
 if [[ -f "$CFG" ]]; then
   set -a
@@ -24,7 +28,7 @@ THREADS="${THREADS:-0}"
 FLASH_ATTN="${FLASH_ATTN:-0}"
 CONT_BATCHING="${CONT_BATCHING:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
-LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-/usr/local/bin/llama-server}"
+LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-/app/llama-server}"
 
 # HF download / convert (see scripts/ensure_model.sh)
 export HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
@@ -36,10 +40,11 @@ export AUTO_CONVERT="${AUTO_CONVERT:-1}"
 export CONVERT_OUTTYPE="${CONVERT_OUTTYPE:-q8_0}"
 export QUANTIZE_TYPE="${QUANTIZE_TYPE:-Q4_K_M}"
 export KEEP_CONVERT_TMP="${KEEP_CONVERT_TMP:-0}"
-export CONVERT_SCRIPT="${CONVERT_SCRIPT:-/opt/llama.cpp/convert_hf_to_gguf.py}"
-export LLAMA_QUANTIZE_BIN="${LLAMA_QUANTIZE_BIN:-/usr/local/bin/llama-quantize}"
+export CONVERT_SCRIPT="${CONVERT_SCRIPT:-/app/convert_hf_to_gguf.py}"
+export LLAMA_QUANTIZE_BIN="${LLAMA_QUANTIZE_BIN:-/app/llama-quantize}"
 export HF_DOWNLOAD_REVISION="${HF_DOWNLOAD_REVISION:-}"
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
+export LD_LIBRARY_PATH="/app${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 log() { echo "[gto-llamacpp] $*"; }
 
