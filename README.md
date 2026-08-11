@@ -1,6 +1,37 @@
 # GTO-llamacpp
 
-在 **RunPod Pod** 上用 [llama.cpp](https://github.com/ggerganov/llama.cpp) 的 `llama-server` 提供 **OpenAI 兼容** HTTP API（默认 **8000** 端口），带 **API Key** 鉴权。适合从 Git 拉取后直接构建/运行。
+在 **RunPod Pod** 上用 [llama.cpp](https://github.com/ggerganov/llama.cpp) 的 `llama-server` 提供 **OpenAI 兼容** HTTP API（默认 **8000** 端口），带 **API Key** 鉴权。
+
+## 一键部署镜像（推荐）
+
+`main` 分支推送后，GitHub Actions 自动构建并推送到 GHCR：
+
+```text
+ghcr.io/andrewdidi/gto-llamacpp:latest
+```
+
+- Actions：仓库 → **Actions** → **Build and push Docker image**（也可手动 **Run workflow**）
+- 首次构建约需较长时间（编译 CUDA `llama-server`）
+- 若 RunPod 拉镜像 401：到 GitHub → **Packages** → `gto-llamacpp` → Package settings → **Change visibility → Public**
+
+### RunPod Pod 填这些即可
+
+1. **Pods → Deploy**（不要用 Serverless）
+2. Container Image：`ghcr.io/andrewdidi/gto-llamacpp:latest`
+3. HTTP Port：`8000`
+4. Volume 挂载：`/models`（磁盘建议 ≥ 80GB）
+5. 环境变量：
+
+```text
+API_KEY=你的调用密钥
+HF_TOKEN=你的HF令牌
+HF_REPO_ID=Qwen/Qwen3.5-9B
+HF_LOCAL_DIR=/models/hf/Qwen3.5-9B
+MODEL_PATH=/models/gguf/Qwen3.5-9B-Q4_K_M.gguf
+MODEL_ALIAS=Qwen3.5-9B
+```
+
+6. 访问：`https://<POD_ID>-8000.proxy.runpod.net/v1/chat/completions`
 
 ## 快速能力
 
@@ -9,9 +40,8 @@
 | 协议 | `POST /v1/chat/completions`、`GET /v1/models` |
 | 端口 | `8000`（RunPod HTTP 代理：`https://<id>-8000.proxy.runpod.net`） |
 | 鉴权 | `Authorization: Bearer <API_KEY>` |
-| 配置 | `config/config.env`（本地）或容器环境变量 |
-
-仓库内已生成示例 Key（写入本地 `config/config.env`，**已 gitignore**）。公开部署前请自行轮换。
+| 镜像 | `ghcr.io/andrewdidi/gto-llamacpp:latest` |
+| 配置 | 环境变量或 `config/config.env`（本地，勿提交密钥） |
 
 ## 目录
 
@@ -77,17 +107,11 @@ docker run --gpus all -p 8000:8000 \
   gto-llamacpp:cuda
 ```
 
-## RunPod 部署（Git 拉取）
+## RunPod 部署（用预构建镜像）
 
-### 推荐流程
+见上文「一键部署镜像」。不要走 Serverless「Import Git Repository」。
 
-1. 将本目录推到独立 Git 仓库（或 monorepo 子路径，构建上下文指向本目录）。
-2. RunPod → **Pods** → Deploy → **Docker** / **GitHub**：
-   - Dockerfile path: `Dockerfile`（本目录为 build context）
-   - Expose **HTTP Port `8000`**
-   - 勾选 GPU（与 CUDA 镜像一致）
-3. **Network Volume** 挂到 `/models`（保留 `hf/` 与 `gguf/` 缓存）。环境变量至少设 `API_KEY`、`HF_TOKEN`。
-4. 环境变量覆盖（可选，优先于文件）：
+### 环境变量参考
 
 | Env | 说明 |
 |-----|------|
@@ -100,7 +124,7 @@ docker run --gpus all -p 8000:8000 \
 | `N_GPU_LAYERS` | 默认 `999` |
 | `CTX_SIZE` | 默认 `8192` |
 
-5. 启动后用公网代理测：
+启动后探测：
 
 ```bash
 ./scripts/smoke_test.sh "https://<POD_ID>-8000.proxy.runpod.net" "sk-gto-..."
