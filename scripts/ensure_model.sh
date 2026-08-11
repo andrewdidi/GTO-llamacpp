@@ -16,6 +16,31 @@ KEEP_CONVERT_TMP="${KEEP_CONVERT_TMP:-0}"
 CONVERT_SCRIPT="${CONVERT_SCRIPT:-/app/convert_hf_to_gguf.py}"
 LLAMA_QUANTIZE_BIN="${LLAMA_QUANTIZE_BIN:-/app/llama-quantize}"
 HF_DOWNLOAD_REVISION="${HF_DOWNLOAD_REVISION:-}"
+CACHE_ROOT="${CACHE_ROOT:-/models/cache}"
+
+# torch/transformers 在 RunPod 上常因 /tmp、HOME 不可写在 import 阶段崩；统一落到 Volume
+prepare_runtime_dirs() {
+  mkdir -p \
+    "$CACHE_ROOT/home" \
+    "$CACHE_ROOT/tmp" \
+    "$CACHE_ROOT/torch/inductor" \
+    "$CACHE_ROOT/torch/hub" \
+    "$CACHE_ROOT/hf" \
+    "$CACHE_ROOT/xdg" \
+    /tmp
+  export HOME="${HOME:-$CACHE_ROOT/home}"
+  export TMPDIR="$CACHE_ROOT/tmp"
+  export TEMP="$TMPDIR"
+  export TMP="$TMPDIR"
+  export TORCHINDUCTOR_CACHE_DIR="$CACHE_ROOT/torch/inductor"
+  export TORCH_HOME="$CACHE_ROOT/torch"
+  export HF_HOME="${HF_HOME:-$CACHE_ROOT/hf}"
+  export XDG_CACHE_HOME="$CACHE_ROOT/xdg"
+  export TORCHDYNAMO_DISABLE=1
+  export TORCH_COMPILE_DISABLE=1
+  # 转换用 CPU 即可，避免无谓的 CUDA 初始化干扰
+  export CUDA_VISIBLE_DEVICES="${CONVERT_CUDA_VISIBLE_DEVICES:-}"
+}
 
 need_hf_download() {
   [[ -n "$HF_REPO_ID" ]] || return 1
@@ -29,6 +54,7 @@ download_hf() {
     log "ERROR: HF_REPO_ID set but HF_TOKEN empty"
     exit 1
   fi
+  prepare_runtime_dirs
   mkdir -p "$HF_LOCAL_DIR"
   log "HF download: $HF_REPO_ID -> $HF_LOCAL_DIR"
   export HF_TOKEN
@@ -79,15 +105,23 @@ convert_and_quantize() {
     exit 1
   fi
 
+  prepare_runtime_dirs
   mkdir -p "$(dirname "$MODEL_PATH")"
   local tmp_gguf
   tmp_gguf="$(dirname "$MODEL_PATH")/Qwen3.5-9B.${CONVERT_OUTTYPE}.gguf"
 
   if [[ ! -f "$tmp_gguf" ]]; then
     log "Converting HF -> GGUF ($CONVERT_OUTTYPE): $tmp_gguf"
-    python3 "$CONVERT_SCRIPT" "$HF_LOCAL_DIR" \
-      --outfile "$tmp_gguf" \
-      --outtype "$CONVERT_OUTTYPE"
+    log "  cache/tmp -> $CACHE_ROOT (TORCHDYNAMO_DISABLE=1)"
+    # 官方脚本依赖 /app 下 conversion、gguf-py 相对路径
+    local convert_dir
+    convert_dir="$(dirname "$CONVERT_SCRIPT")"
+    (
+      cd "$convert_dir"
+      python3 "$(basename "$CONVERT_SCRIPT")" "$HF_LOCAL_DIR" \
+        --outfile "$tmp_gguf" \
+        --outtype "$CONVERT_OUTTYPE"
+    )
   else
     log "Reuse convert output: $tmp_gguf"
   fi
@@ -120,6 +154,8 @@ download_direct_url() {
 }
 
 # --- main ---
+prepare_runtime_dirs
+
 if [[ -f "$MODEL_PATH" ]]; then
   log "Model present: $MODEL_PATH"
   exit 0
