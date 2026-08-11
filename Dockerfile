@@ -21,10 +21,9 @@ COPY start.sh /gto/start.sh
 COPY scripts /gto/scripts
 COPY config/config.env.example /gto/config/config.env.example
 RUN chmod +x /gto/start.sh /gto/scripts/*.sh \
- && mkdir -p /gto/config /models/hf /models/gguf \
- && if [ ! -f /gto/config/config.env ]; then \
-      cp /gto/config/config.env.example /gto/config/config.env; \
-    fi
+ && mkdir -p /gto/config /models/hf /models/gguf
+# 不在镜像内写入 config.env（避免 sk-gto-REPLACE_ME 覆盖 RunPod 环境变量）
+# 生产请用 Environment Variables：API_KEY / HF_TOKEN
 
 # 官方 full 镜像：二进制与 .so、convert 脚本均在 /app
 ENV HOST=0.0.0.0 \

@@ -1,13 +1,28 @@
 #!/usr/bin/env bash
 # Start llama-server on HOST:PORT with API key from config/env.
+# 优先级：容器/RunPod 环境变量 > config/config.env > 默认值
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# 兼容镜像内 /gto 与本地仓库根目录
 CFG="${ROOT}/config/config.env"
 if [[ ! -f "$CFG" && -f /gto/config/config.env ]]; then
   CFG=/gto/config/config.env
 fi
+
+# 先保存已有环境变量（RunPod 注入），避免被 config.env 占位符覆盖
+_SAVED_API_KEY="${API_KEY-}"
+_SAVED_LLAMA_API_KEY="${LLAMA_API_KEY-}"
+_SAVED_HF_TOKEN="${HF_TOKEN-}"
+_SAVED_HF_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN-}"
+_SAVED_HF_REPO_ID="${HF_REPO_ID-}"
+_SAVED_HF_LOCAL_DIR="${HF_LOCAL_DIR-}"
+_SAVED_MODEL_PATH="${MODEL_PATH-}"
+_SAVED_MODEL_URL="${MODEL_URL-}"
+_SAVED_MODEL_ALIAS="${MODEL_ALIAS-}"
+_SAVED_HOST="${HOST-}"
+_SAVED_PORT="${PORT-}"
+_SAVED_N_GPU_LAYERS="${N_GPU_LAYERS-}"
+_SAVED_CTX_SIZE="${CTX_SIZE-}"
 
 if [[ -f "$CFG" ]]; then
   set -a
@@ -15,6 +30,21 @@ if [[ -f "$CFG" ]]; then
   source "$CFG"
   set +a
 fi
+
+# 环境变量覆盖文件
+[[ -n "${_SAVED_API_KEY}" ]] && API_KEY="$_SAVED_API_KEY"
+[[ -n "${_SAVED_LLAMA_API_KEY}" ]] && LLAMA_API_KEY="$_SAVED_LLAMA_API_KEY"
+[[ -n "${_SAVED_HF_TOKEN}" ]] && HF_TOKEN="$_SAVED_HF_TOKEN"
+[[ -n "${_SAVED_HF_HUB_TOKEN}" ]] && HUGGING_FACE_HUB_TOKEN="$_SAVED_HF_HUB_TOKEN"
+[[ -n "${_SAVED_HF_REPO_ID}" ]] && HF_REPO_ID="$_SAVED_HF_REPO_ID"
+[[ -n "${_SAVED_HF_LOCAL_DIR}" ]] && HF_LOCAL_DIR="$_SAVED_HF_LOCAL_DIR"
+[[ -n "${_SAVED_MODEL_PATH}" ]] && MODEL_PATH="$_SAVED_MODEL_PATH"
+[[ -n "${_SAVED_MODEL_URL}" ]] && MODEL_URL="$_SAVED_MODEL_URL"
+[[ -n "${_SAVED_MODEL_ALIAS}" ]] && MODEL_ALIAS="$_SAVED_MODEL_ALIAS"
+[[ -n "${_SAVED_HOST}" ]] && HOST="$_SAVED_HOST"
+[[ -n "${_SAVED_PORT}" ]] && PORT="$_SAVED_PORT"
+[[ -n "${_SAVED_N_GPU_LAYERS}" ]] && N_GPU_LAYERS="$_SAVED_N_GPU_LAYERS"
+[[ -n "${_SAVED_CTX_SIZE}" ]] && CTX_SIZE="$_SAVED_CTX_SIZE"
 
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
@@ -30,7 +60,6 @@ CONT_BATCHING="${CONT_BATCHING:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-/app/llama-server}"
 
-# HF download / convert (see scripts/ensure_model.sh)
 export HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 export HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-$HF_TOKEN}"
 export HF_REPO_ID="${HF_REPO_ID:-}"
@@ -49,7 +78,11 @@ export LD_LIBRARY_PATH="/app${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 log() { echo "[gto-llamacpp] $*"; }
 
 if [[ -z "$API_KEY" || "$API_KEY" == "sk-gto-REPLACE_ME" ]]; then
-  log "ERROR: set API_KEY in config/config.env or environment"
+  log "ERROR: API_KEY 未设置（或仍是占位符 sk-gto-REPLACE_ME）"
+  log "  RunPod: Pod → Edit → Environment Variables 增加："
+  log "    API_KEY=你的密钥"
+  log "    HF_TOKEN=你的HF令牌"
+  log "  然后 Restart Pod（勿用 Serverless）"
   exit 1
 fi
 
@@ -60,7 +93,6 @@ fi
 
 ENSURE="${ROOT}/scripts/ensure_model.sh"
 if [[ -x "$ENSURE" ]]; then
-  # shellcheck disable=SC1090
   bash "$ENSURE"
 else
   log "ERROR: missing $ENSURE"
