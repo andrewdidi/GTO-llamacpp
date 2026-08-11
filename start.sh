@@ -74,6 +74,19 @@ export LLAMA_QUANTIZE_BIN="${LLAMA_QUANTIZE_BIN:-/app/llama-quantize}"
 export HF_DOWNLOAD_REVISION="${HF_DOWNLOAD_REVISION:-}"
 export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 export LD_LIBRARY_PATH="/app${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export CACHE_ROOT="${CACHE_ROOT:-/models/cache}"
+# 提前准备可写目录，避免 torch import 阶段 tempfile/cache 崩掉
+mkdir -p "$CACHE_ROOT"/{home,tmp,torch/inductor,torch/hub,hf,xdg} /tmp
+export HOME="${HOME:-$CACHE_ROOT/home}"
+export TMPDIR="${TMPDIR:-$CACHE_ROOT/tmp}"
+export TEMP="$TMPDIR"
+export TMP="$TMPDIR"
+export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-$CACHE_ROOT/torch/inductor}"
+export TORCH_HOME="${TORCH_HOME:-$CACHE_ROOT/torch}"
+export HF_HOME="${HF_HOME:-$CACHE_ROOT/hf}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$CACHE_ROOT/xdg}"
+export TORCHDYNAMO_DISABLE=1
+export TORCH_COMPILE_DISABLE=1
 
 log() { echo "[gto-llamacpp] $*"; }
 
